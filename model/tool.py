@@ -10,22 +10,16 @@ from datetime import datetime
 from sklearn.metrics import roc_auc_score, roc_curve
 
 import numpy as np
-# from keras.callbacks import LearningRateScheduler
 from tqdm import tqdm
 
 
-DIM1 = 50
-DIM2 = 25
-DIM3 = 34
-
-
 def get_roc(sig,bkg):
-    testY = np.array([1]*len(sig) + [0]*len(bkg))
-    predY = np.array(sig+bkg)
-    print(testY,predY)
-    auc = roc_auc_score(testY, predY)
-    fpr, tpr, thr = roc_curve(testY, predY)
-    return fpr,tpr,thr,auc
+  testY = np.array([1]*len(sig) + [0]*len(bkg))
+  predY = np.array(sig+bkg)
+  print(testY, predY)
+  auc = roc_auc_score(testY, predY)
+  fpr, tpr, thr = roc_curve(testY, predY)
+  return fpr,tpr,thr,auc
 
 
 def label_data(signal_images, background_images):
@@ -35,18 +29,18 @@ def label_data(signal_images, background_images):
 
 
 class cd:
-   '''
-   Context manager for changing the current working directory
-   '''
-   def __init__(self, newPath):
-      self.newPath = newPath
+  '''
+  Context manager for changing the current working directory
+  '''
+  def __init__(self, newPath):
+    self.newPath = newPath
 
-   def __enter__(self):
-      self.savedPath = os.getcwd()
-      os.chdir(self.newPath)
+  def __enter__(self):
+    self.savedPath = os.getcwd()
+    os.chdir(self.newPath)
 
-   def __exit__(self, etype, value, traceback):
-      os.chdir(self.savedPath)
+  def __exit__(self, etype, value, traceback):
+    os.chdir(self.savedPath)
 
 
 def shrink_image(input_image):
@@ -143,25 +137,18 @@ def create_table_zpos(file_list, load_strings, upper=True):
       '''
   return event_dict
 
-def create_table_energy(file_list, load_strings, low=2.0,high=3.0):
+def create_table_energy(file_list, load_strings, low=2.0, high=3.0):
   event_dict = {el:[] for el in load_strings}
   for file in tqdm(file_list):
-    try:
-      with open(file, 'rb') as f:
-        while True:
-          try:
-            event = pickle.load(f, encoding='latin1')
-            if (event["energy"] > high) or (event["energy"] < low):
-              continue
-            for load in load_strings:
-              event_dict[load].append(event[load])
-          except EOFerror:
-          #except:
-            break
-    except:
-      '''
-      do nothing
-      '''
+    with open(file, 'rb') as f:
+      try:
+        event = pickle.load(f, encoding='latin1')
+        if (event["energy"] > high) or (event["energy"] < low):
+          continue
+        for load in load_strings:
+          event_dict[load].append(event[load])
+      except EOFError:
+        break
   return event_dict
 
 def look_table(file_list, load_strings):

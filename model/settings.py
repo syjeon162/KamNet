@@ -9,9 +9,7 @@
 SEED = False                                    # Reproducibility of KamNet
 NUM_EPOCHS = 30                                 # Number of training epochs
 BATCH_SIZE = 32                                 # Batch size
-FILE_UPPERLIM = 5                               # Number of files in the pickle list, setting this to a small value allows faster training of model.
-												# Setting FILE_UPPERLIM to a very large number (a.k.a. 999999) will allow us to use the entire dataset
-EV_SUFFIX = "_17and20good_nocharge"             # Suffix of pickle list
+
 DSIZE = 20000                                   # Number of signal/background events in training dataset. The final training size is DSIZE*2
 KAMNET_PARAMS = {"momentum": 0.7806697572271865,# Hyperparameters of KamNet
 				"lr": 7.729560386535045e-05, "first_filter": 5,
@@ -30,4 +28,4 @@ KAMNET_PARAMS = {"momentum": 0.7806697572271865,# Hyperparameters of KamNet
 				"BATCH_SIZE": 32,
 				"last_bw": 2,
 				"do2": 0.0}
-LEARNING_RATE =0.000018675460538381732          # Learning rate
+LEARNING_RATE = 0.000018675460538381732          # Learning rate

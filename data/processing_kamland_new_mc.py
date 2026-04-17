@@ -31,12 +31,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from settings import COLS, FV_CUT_LOW, FV_CUT_HI, good_hit, only_17inch, use_charge, ELOW, EHI, PLOT_HITMAP
-colormap_normal = cm.get_cmap("cool")
+colormap_normal = plt.get_cmap("cool")
 FSIZE = 20
 plt.rcParams['font.size'] = FSIZE
 
 # Transcribe hits to a 4D tensor
-def transcribe_hits(input, outputdir, PMT_POSITION, elow, ehi):
+def transcribe_hits(input, outputdir, PMT_POSITION):
     current_clock = clock(0)
     f1 = TFile(input)
     tree = f1.Get("nt")  # Read the ROOT tree
@@ -53,7 +53,7 @@ def transcribe_hits(input, outputdir, PMT_POSITION, elow, ehi):
         tree.GetEntry(evt_index)
         #FV/ROI cut
         try:
-            energy = tree.EnergyA2   # These are the 
+            energy = tree.EnergyA2
             position = tree.r
             hit = tree.NhitID
             if (energy < ELOW) or (energy > EHI) or (position > FV_CUT_HI) or (position < FV_CUT_LOW):
@@ -144,7 +144,7 @@ def transcribe_hits(input, outputdir, PMT_POSITION, elow, ehi):
         plt.ylabel("Normalized Amplitude",fontsize=25,labelpad=20)
         # plt.savefig("th.png",dpi=600)
 
-    with open(os.path.join(outputdir, "eventfile_%s_%.2f_%.2f.pickle" % (input_name, elow, ehi)), 'wb') as handle:
+    with open(os.path.join(outputdir, "eventfile_%s_%.2f_%.2f.pickle" % (input_name, ELOW, EHI)), 'wb') as handle:
         numev = 0
         print(len(event_map))
         for eventd in event_map:
@@ -189,13 +189,11 @@ def main():
     parser.add_argument("--pmt_file_index", default="/project/snoplus/ml2/data/pmt_xyz.dat")
     parser.add_argument("--pmt_file_size", default="/projectnb/snoplus/machine_learning/prototype/pmt.txt")
     parser.add_argument("--process_index", type=int, default=-1)
-    parser.add_argument("--elow", type=float, default=2.0)
-    parser.add_argument("--ehi", type=float, default=3.0)
     args = parser.parse_args()
 
     position = PMT_setup(args.pmt_file_index)
 
-    fmc = transcribe_hits(input=args.input, outputdir=args.outputdir, PMT_POSITION = position,elow=args.elow, ehi=args.ehi)
+    fmc = transcribe_hits(input=args.input, outputdir=args.outputdir, PMT_POSITION = position)
 
 
 

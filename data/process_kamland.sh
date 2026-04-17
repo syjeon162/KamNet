@@ -6,6 +6,9 @@
 
 #$$ -j y
 #$$ -V
-source /projectnb/snoplus/Mo_work_place/RAT/rat-pac/env.sh
+
+conda deactivate
+module load python3/3.12.4
+source /project/snoplus/ROOT6.28/root_install/bin/thisroot.sh
 
 python ${PROCESSOR} --input ${INPUT} --outputdir ${OUTPUT} --process_index ${PROCESSING_UNIT}

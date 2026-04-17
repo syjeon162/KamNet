@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import cm
-colormap_normal = cm.get_cmap("OrRd")
+colormap_normal = plt.get_cmap("OrRd")
 
 class clock:
 
