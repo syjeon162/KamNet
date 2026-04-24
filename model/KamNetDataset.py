@@ -7,207 +7,151 @@
 #  * The PyTorch dataset classes for KamNet
 #=====================================================================================
 import numpy as np
+import pandas as pd
 from torch.utils.data import Dataset
 from tqdm import tqdm
 import pickle
 
-def readEventsFromFiles(file_list, load_strings, low=2.0, high=3.0):
-  event_dict = {el:[] for el in load_strings}
-  for file in tqdm(file_list):
-    with open(file, 'rb') as f:
-      try:
-        event = pickle.load(f, encoding='latin1')
-        if (event["energy"] > high) or (event["energy"] < low):
-          continue
-        for load in load_strings:
-          event_dict[load].append(event[load])
-      except EOFError:
-        break
-  return event_dict
+
+def loadPickledItems(file):
+    '''
+    Generator for pickled items in pickle file
+    '''
+    with open(file, "rb") as f:
+        while True:
+            try:
+                yield pickle.load(f)
+            except EOFError:
+                break
+
+def readEventsFromFiles(files_dict, vars_to_load, var_for_cut="energy", low=2.0, high=3.0):
+    '''
+    Read in events from pickle files; returns pandas dataframe
+    * vars_to_load : names of variables to load (array of str)
+    * var_for_cut : name of variables to use for selection (str)
+    * low, high : lower/higher bound of selection (int/float)
+    '''
+    event_dict = {el:[] for el in vars_to_load}
+    event_dict['isotope'] = []
+
+    for isotope, file_list in files_dict.items():
+        print(f" * Loading data for {isotope}")
+
+        for file in tqdm(file_list):
+            for event in loadPickledItems(file):
+                if (event[var_for_cut] > high) or (event[var_for_cut] < low):
+                    continue
+
+                for var in vars_to_load:
+                    if var != "isotope":
+                        event_dict[var].append(event[var])
+                event_dict['isotope'].append(isotope)
+
+    return pd.DataFrame(event_dict)
 
 class KamNetDataset(Dataset):
 
-    def __init__(self, json_name):
-        """
-        Base class for all KamNet datasets
-        """
-        self.json_name = json_name
+    def __init__(self, files_dict, signal_isotope, vars_to_output=None, elow=2.0, ehigh=3.0):
+        '''
+        Base class for KamNet datasets
+        '''
+        if vars_to_output:
+            self.vars_to_output = vars_to_output
+        else:
+            self.vars_to_output = []
+
+        vars_to_load = np.unique(["event","Nhit","energy"] + list(self.vars_to_output))
+
+        # read in data as panda dataframe
+        self.data = readEventsFromFiles(files_dict, vars_to_load, low=elow, high=ehigh)
+        # convert images to ndarray
+        self.data['event'] = self.data['event'].apply(lambda x: np.array(x, dtype=object))
+        # Add labels to events; 1 if signal, 0 if background
+        self.data['label'] = np.where(self.data.isotope == signal_isotope, 1, 0)
+
+        # something like (T, H, W)
+        example_image = self.data['event'][0] # list of sparse matrices
+        example_sparse_matrix = example_image[0]
+        self.image_shape = (example_image.shape[0], *example_sparse_matrix.shape)
+        print(f"Image Shape: {self.image_shape}")
 
     def __len__(self):
-        return self.size
+        return len(self.data.index)
 
     def __getitem__(self, idx):
+        # un-sparse matrices
         image = np.zeros(self.image_shape, dtype=np.float32)
-        for time_index, time in enumerate(self.trainX[idx]):
+        for time_index, time in enumerate(self.data.iloc[idx]['event']):
             image[time_index] = time.todense()
-        return image, self.trainY[idx], self.energy[idx]
+        # aggregate other variables to save
+        other_vars = self.data[self.vars_to_output].iloc[idx].to_dict()
+        return image, self.data.iloc[idx]['label'], other_vars
 
-    def return_time_channel(self):
+    def printSize(self):
+        '''
+        Print dataset size information for each isotope
+        '''
+        all_isotopes = self.data.isotope.unique()
+        name_len = max([len(i) for i in all_isotopes])
+        isotope_groups = self.data.groupby('isotope', sort=False).size().reset_index(name='counts')
+        print(isotope_groups)
+
+    def downsize(self, dsize):
+        '''
+        downsize each dataset (by isotope) to maximum dsize
+        '''
+        print(f" * Downsizing datasets to dsize={dsize}")
+        shuffled = self.data.sample(frac=1)
+        downsized = shuffled.groupby('isotope', sort=False).head(dsize)
+        self.data = downsized.reset_index(drop=True)
+        self.printSize()
+    
+    def matchSBNhit(self):
+        '''
+        Perform Nhit matching between signal and all backgrounds
+        '''
+        print(" * Nhit Matching for signal and background")
+        grouped = self.data.groupby(['label','Nhit'], sort=False)
+        all_matched_groups = []
+        for nhit in self.data.Nhit.unique():
+            try:
+                len_bkg = len(grouped.get_group((0, nhit)).index)
+                len_sig = len(grouped.get_group((1, nhit)).index)
+            except KeyError:
+                continue
+            max_sample = min(len_bkg, len_sig)
+            for label in [0, 1]:
+                all_matched_groups.append(grouped.get_group((label, nhit)).sample(max_sample))
+        self.data = pd.concat(all_matched_groups, ignore_index=True)
+        self.printSize()
+    
+    def matchIsotopeNhit(self):
+        '''
+        Perform Nhit matching between all isotopes in dataset
+        This is identical to matchSBNhit() if there are only two isotopes in the dataset,
+        where one is signal, one is background.
+        '''
+        print(">>> Nhit Matching for each isotope...")
+        grouped = self.data.groupby(['isotope','Nhit'], sort=False)
+        all_isotopes = self.data.isotope.unique()
+        all_matched_groups = []
+        for nhit in self.data.Nhit.unique():
+            len_per_isotope = []
+            try:
+                for isotope in all_isotopes:
+                    len_per_isotope.append(len(grouped.get_group((isotope, nhit)).index))
+            except KeyError:
+                continue
+            max_sample = min(len_per_isotope)
+            for isotope in  all_isotopes:
+                all_matched_groups.append(grouped.get_group((isotope, nhit)).sample(max_sample))
+        self.data = pd.concat(all_matched_groups, ignore_index=True)
+        self.printSize()
+
+    def getInputDimension(self):
         '''
         This method returns the time channel and one hit map dimension of input
         E.g. If it returns (28,38), this means the input has 28 time channel, where
         each channel contains a 38*38 hitmap
         '''
-        return (self.__getitem__(0)[0].shape[0], self.image_shape[1])
-
-    def getRandomSamples(self, input, maxNum):
-        '''
-        This method randomly resamples part of the dataset,
-        and returns indices for the downsized sample
-        '''
-        if input.shape[0] < maxNum:
-            return np.arange(input.shape[0])
-        sig_samples = np.random.choice(np.arange(input.shape[0]), maxNum, replace=False)
-        return sig_samples
-
-    def getSparseNhit(self, sparse_dict):
-        '''
-        This method gets nhit as a list of given event dict
-        It reads out the Nhit directly if Nhit is stored in the dict
-        Otherwise it calculates Nhit from the sparse matrices
-        '''
-        if "Nhit" in sparse_dict.keys():
-            return np.array(sparse_dict["Nhit"], dtype=int).flatten()
-        else:
-            sparsem = np.array(sparse_dict[self.json_name], dtype=object)
-            sparse_nhit = []
-            for sparsem_i in tqdm(sparsem):
-                sparse_nhit.append(np.sum([len(slice.nonzero()[0]) for slice in sparsem_i]))
-            return np.array(sparse_nhit)
-
-    def match_nhit(self, sig_dict, bkg_dict, multiplier=1.0):
-        '''
-        Perform Nhit matching between input sig and output bkg
-        '''
-        sig_img = np.array(sig_dict[self.json_name], dtype=object)
-        bkg_img = np.array(bkg_dict[self.json_name], dtype=object)
-        nhit_range = np.arange(0, 2000, 1)
-        sig_nhit = np.array(self.getSparseNhit(sig_dict))
-        bkg_nhit = np.array(self.getSparseNhit(bkg_dict))
-        sig_energy = np.array(sig_dict['energy'], dtype=object)
-        bkg_energy = np.array(bkg_dict['energy'], dtype=object)
-
-        sig_list = []
-        bkg_list = []
-
-        for (nlow, nhi) in tqdm(zip(list(nhit_range[:-1]), list(nhit_range[1:])),0):
-            sig_index = np.where((sig_nhit >= nlow) & (sig_nhit <nhi))[0]
-            bkg_index = np.where((bkg_nhit >= nlow) & (bkg_nhit <nhi))[0]
-            if (len(sig_index) != 0) and (len(bkg_index) != 0):
-                sampled_amount = min(len(sig_index), len(bkg_index))
-                sig_list += list(np.random.choice(list(sig_index), sampled_amount, replace=False))
-                bkg_list += list(np.random.choice(list(bkg_index), min(len(bkg_index), int(sampled_amount*multiplier)), replace=False))
-        # save nhit before and after?
-
-        return sig_img[sig_list], bkg_img[bkg_list], sig_energy[sig_list], bkg_energy[bkg_list]
-
-
-class KamNetDataset_Nhit(KamNetDataset):
-
-    def __init__(self, sig_img_list, bkg_img_list, json_name, dsize=-1, elow=2.0, ehi=3.0):
-        super(KamNetDataset_Nhit, self).__init__(json_name)
-        """
-        KamNet dataset with Nhit matching. Nhit matching removes Nhit dependency of sig/bkg events
-        Used for training the neural network
-        elow and ehi indicates the min/max energy of events we'd like to read out
-        """
-        sig_dict = readEventsFromFiles(sig_img_list, (json_name, 'Nhit','energy','zpos'), low=elow, high=ehi)
-        bkg_dict = readEventsFromFiles(bkg_img_list, (json_name, 'Nhit','energy','zpos'), low=elow, high=ehi)
-
-        sig_img, bkg_img, sig_energy, bkg_energy = self.match_nhit(sig_dict, bkg_dict)
-
-        if dsize != -1:
-          sig_indices = self.getRandomSamples(sig_img, dsize)
-          sig_img = sig_img[sig_indices]
-          sig_energy = sig_energy[sig_indices]
-          bkg_indices = self.getRandomSamples(bkg_img, dsize)
-          bkg_img = bkg_img[bkg_indices]
-          bkg_energy = bkg_energy[bkg_indices]
-
-        sig_labels = np.ones(len(sig_img), dtype=np.float32)
-        bkg_labels = np.zeros(len(bkg_img), dtype=np.float32)
-
-        self.trainX = np.concatenate((sig_img, bkg_img), axis=0)
-        self.trainY = np.concatenate((sig_labels, bkg_labels), axis=0)
-        self.energy = np.concatenate((sig_energy, bkg_energy), axis=0)
-
-        self.size = len(sig_img) + len(bkg_img)
-        self.image_shape = (trainX.shape[-1], *trainX[0,0].shape)
-
-
-class KamNetDataset_NonUniform(KamNetDataset):
-
-    def __init__(self, sig_img_list, bkg_img_list, json_name, elow=2.0,ehi=3.0):
-        super(KamNetDataset_NonUniform, self).__init__(json_name)
-        """
-        KamNet dataset which do not require the sig/bkg dataset to follow the same size
-        """
-        sig_dict = readEventsFromFiles(sig_img_list, (json_name, 'Nhit','energy','zpos'), low=elow, high=ehi)
-        bkg_dict = readEventsFromFiles(bkg_img_list, (json_name, 'Nhit','energy','zpos'), low=elow, high=ehi)
-
-        sig_img = np.array(sig_dict[json_name], dtype=object)
-        bkg_img = np.array(bkg_dict[json_name], dtype=object)
-
-        sig_indices = self.getRandomSamples(sig_img, dsize)
-        sig_img = sig_img[sig_indices]
-        bkg_indices = self.getRandomSamples(bkg_img,dsize)
-        bkg_img = bkg_img[bkg_indices]
-
-        sig_labels = np.ones(len(sig_img), dtype=np.float32)
-        bkg_labels = np.zeros(len(bkg_img), dtype=np.float32)
-
-        self.trainX = np.concatenate((sig_img, bkg_img), axis=0)
-        self.size = self.trainX.shape[0]
-        self.trainY = np.concatenate((sig_labels, bkg_labels), axis=0)
-        self.image_shape = (self.trainX.shape[-1], *self.trainX[0,0].shape)
-
-        sig_energy = np.array(sig_dict["energy"]).flatten()
-        bkg_energy = np.array(bkg_dict["energy"]).flatten()
-        self.energy = np.concatenate((sig_energy, bkg_energy), axis=0)
-
-    def __getitem__(self, idx):
-        image = np.ndarray(self.image_shape, dtype=np.float32)
-        for time_index, time in enumerate(self.trainX[idx]):
-            image[time_index] = time.todense()
-        return image, self.trainY[idx], self.energy[idx]
-
-
-class KamNetDatasetRep(KamNetDataset):
-
-    def __init__(self, sig_img_list, bkg_image_dict, json_name, dsize = -1, elow=2.0,ehi=3.0):
-        super(KamNetDatasetRep, self).__init__(json_name)
-        """
-        KamNet dataset outputing multiple isotopes for validation purpose
-        """
-
-        self.trainX = []
-        self.trainY = []
-        self.energy = []
-
-        sig_dict = readEventsFromFiles(sig_img_list, (json_name, "Nhit", "energy"), low=elow, high=ehi)
-        sig_img = np.array(sig_dict[json_name], dtype=object)
-        sig_img_indices = self.getRandomSamples(sig_img, 2000)
-        sig_img = sig_img[sig_img_indices]
-        
-        self.trainX.append(sig_img)
-        self.trainY += ["sig"] * len(sig_img)
-        sig_energy = np.array(sig_dict["energy"]).flatten()
-        self.energy.append(sig_energy[sig_img_indices])
-
-        for bkgn,bkglist in bkg_image_dict.items():
-            bkgev = readEventsFromFiles(bkglist, (json_name, "id", "energy"), low=elow, high=ehi)
-            sig_img = np.array(bkgev[json_name], dtype=object)
-            if len(sig_img) == 0:
-                continue
-            sig_img_indices = self.getRandomSamples(sig_img, 2000)
-            sig_img = sig_img[sig_img_indices]
-            self.trainX.append(sig_img)
-            self.trainY += [bkgn] * len(sig_img)
-            sig_energy = np.array(bkgev["energy"]).flatten()
-            self.energy.append(sig_energy[sig_img_indices])
-
-        self.trainX = np.concatenate(self.trainX, axis=0)
-        self.trainY = np.array(self.trainY)
-        self.energy = np.concatenate(self.energy, axis=0)
-        self.image_shape = (self.trainX.shape[-1], *self.trainX[0,0].shape)
-        self.size = len(self.trainY)
+        return (self.image_shape[0], self.image_shape[1])

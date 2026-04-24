@@ -6,8 +6,8 @@ seed_value = 7
 
 num_epochs = 30
 batch_size = 32
-learning_rate = 0.000018675460538381732
 max_dataset_size = 20000 # None or int
+learning_rate = 0.000018675460538381732
 
 # Name of isotope to designate as signal
 signal_isotope = "2nu_1st0p"
@@ -36,26 +36,6 @@ validation_split = 0.25
 # trained_model = "/projectnb/snoplus/SoYoung/klz/kamnet-training/260319_2nu1st0p_vs_2nu_goodPMTs_trial2/KamNet_epoch18.pt"
 
 
-# ===================================
-# >>> >>> >>> Input Files <<< <<< <<<
-# ===================================
-[input] # Path to directory containing pickle files for each isotope
-2nu_1st0p = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_1st0p_Xe136_goodPMTs"
-Xe136     = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_Xe136_goodPMTs"
-# Bi210m    = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_Bi210m"
-# C11p      = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_C11p"
-# Kr85m     = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_Kr85m"
-# SolarB8ES = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_SolarB8ES"
-# Xe137m    = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_Xe137m"
-# Cs136m    = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_Cs136m"
-# I122      = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_I122"
-# I124      = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_I124"
-# I130      = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_I130"
-# K40m      = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_K40m"
-# Sb118     = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_Sb118"
-# SingleGamma-2225keV = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet2/XeLS_SingleGamma-2225keV"
-
-
 # ==============================================
 # >>> >>> >>> KamNet Hyperparameters <<< <<< <<<
 # ==============================================
@@ -79,3 +59,11 @@ so3gridtype = "so3_eq"
 ftype = "SO3I"
 last_bw = 2
 do2 = 0.0
+
+
+# ===================================
+# >>> >>> >>> Input Files <<< <<< <<<
+# ===================================
+[input] # Path to directory containing pickle files for each isotope
+2nu_1st0p = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_1st0p_Xe136_goodPMTs"
+Xe136     = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_Xe136_goodPMTs"

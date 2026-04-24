@@ -12,8 +12,6 @@ MACRO_DIR = "/projectnb/snoplus/SoYoung/dumpfiles"                              
 TIME = "0:10:00"                                                                    # Processing time of each shell script
 PROCESSOR = "/project/snoplus/SoYoung/klz/KamNet/data/processing_kamland_new_mc.py" # The processor we'd like to use
 
-OUT_PICKLE_DIR = "/projectnb/snoplus/SoYoung/klz/plist/"                            # Location of the .dat pickle list
-
 # Define the size of each hit maps
 COLS = 38
 ROWS = COLS
@@ -30,5 +28,3 @@ good_hit = True        # If true, use only good PMT hits, otherwise use all PMT 
 only_17inch = False    # If true, use only 17-inch PMTs, otherwise use both 17 and 20 inch pmts
 use_charge = False     # If true, register the corresponding charge of each PMT to hit map for each hit, otherwise register 1.0 for each hit
 PLOT_HITMAP=False      # Plot flag. If true, plot hit maps of a input event. Note that if this flag is set to True, then the processing script won't process any file.
-
-

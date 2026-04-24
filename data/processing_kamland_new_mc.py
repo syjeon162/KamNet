@@ -123,6 +123,7 @@ def transcribe_hits(input, outputdir, PMT_POSITION):
         event_dic['event'] = event
 
         event_map.append(event_dic)
+        
     if PLOT_HITMAP:
         '''
         This is the plot method for given dataset, it plots a few selected hit maps for
@@ -179,9 +180,6 @@ def transcribe_hits(input, outputdir, PMT_POSITION):
         print("Number of Events: ", numev)
     return 0
 
-
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="/projectnb2/snoplus/KLZ_NEW2/machine_learning/CDM/CDM_deltaM16.5_XeLS_8.root")
@@ -195,9 +193,10 @@ def main():
 
     fmc = transcribe_hits(input=args.input, outputdir=args.outputdir, PMT_POSITION = position)
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('configfile', type=str, action="store", help="Pass in .TOML file that contains KamNet settings to use.")
+    args = parser.parse_args()
+    # FIXME : add TOML
 
-
-
-
-main()
-
+    main()

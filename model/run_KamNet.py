@@ -1,30 +1,34 @@
 '''
 Wrapper for running KamNet
-Use to train or validate
 '''
 import os
+import sys
+import shutil
 import argparse
 import random
 import pickle
 import tomllib
 from tqdm import tqdm
 
-from sklearn.metrics import roc_auc_score, roc_curve
-from tool import get_roc, get_rej, roc_nhit, cd
+import numpy as np
+from sklearn import metrics
 
+import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data as data_utils
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 
-from KamNetDataset import KamNetDataset, KamNetDataset_Nhit, KamNetDatasetRep
-
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+from KamNet import KamNet
+from KamNetDataset import KamNetDataset
 
 
 def useSeed(seed=7):
     '''
-    Setting reproducability. If SEED=True, then training the neural network with
+    Setting reproducability. If used, training the neural network with
     the same configuration will result in exactly the same output
+
+    FIXME : should be double-checked if everything has been accounted for
     '''
     np.random.seed(seed)
     random.seed(seed)
@@ -54,211 +58,359 @@ def getFilesUnderFolder(path, filetype=""):
         return [os.path.join(path,f) for f in os.listdir(path)
                 if os.path.isfile(os.path.join(path,f))]
 
-def load_data(batch_size, signal_dir, bkg_dir, elow, ehi, file_upperlim):
+def load_data(files_dict, signal_isotope,
+        vars_to_output=[], batch_size=32, elow=0.5, ehigh=5.0, dsize=None, match_nhit=False):
     '''
-    Load datasets from various pickle list
+    Load datasets from input
+        * files_dict: dictionary of list of paths to pickle files, keyed by isotope name
+        * signal_isotope: name of isotope that should be designated as the signal
     '''
-    json_name = "event"
+    print("\n>>> Loading data...")
+    
+    dataset = KamNetDataset(files_dict, signal_isotope, vars_to_output=vars_to_output,
+                            elow=elow, ehigh=ehigh)
 
-    data_list = getFilesUnderFolder(signal_dir, "pickle")
-    datab_list = getFilesUnderFolder(bkg_dir, "pickle")
-    dataset = KamNetDataset_Nhit(data_list[:file_upperlim], datab_list[:file_upperlim],
-        str(json_name), dsize=-1, bootstrap=False, elow=elow, ehi=ehi)
-    validation_split = .3
-    shuffle_dataset = True
-    random_seed= 42222
+    dataset.printSize()
 
-    division = 2
-    dataset_size = int(len(dataset)/division)
-    indices = list(range(dataset_size))
-    split = int(np.floor(validation_split * dataset_size))
-    if shuffle_dataset:
-        # Shuffle the dataset
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
-    train_indices, val_indices = indices[split:], indices[:split]
+    if match_nhit:
+        # match nhit between signal and all backgrounds aggregated together
+        if match_nhit == "sig-bkg":
+            dataset.matchSBNhit()
+        # match nhit between each and all isotopes
+        elif match_nhit == "isotope":
+            dataset.matchIsotopeNhit()
+        else:
+            raise Exception("Pass in 'sig-bkg' or 'isotope'")
 
-    train_indices += list(division*dataset_size - 1 - np.array(train_indices))
-    val_indices += list(division*dataset_size - 1 - np.array(val_indices))
+    if dsize:
+        dataset.downsize(dsize)
 
-    np.random.shuffle(train_indices)
-    np.random.shuffle(val_indices)
+    dataloader = data_utils.DataLoader(dataset, batch_size=batch_size, drop_last=True)
+    
+    print(f"DataLoader size: {len(dataloader)} / Batch size: {batch_size}")
 
-    train_sampler = SubsetRandomSampler(train_indices)
-    valid_sampler = SubsetRandomSampler(val_indices)
+    return dataloader
 
-    # Convert dataset to data loader
-    train_loader = data_utils.DataLoader(dataset, batch_size=batch_size, sampler=train_sampler,  drop_last=True)
-    valid_loader = data_utils.DataLoader(dataset, batch_size=batch_size, sampler=valid_sampler,  drop_last=True)
-    print(len(train_loader), len(val_loader))
-    print(f"time_channel: {dataset.return_time_channel()}")
-
-    return train_loader, valid_loader, dataset.return_time_channel()
-
-def trainKamNet():
-    return
-
-def validateKamNet():
-    return
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('settings', type=str, description="Pass in .TOML file that contains KamNet settings to use.")
-    args = parser.parse_args()
-
-    if not os.path.exists(args.outdir):
-        os.makedirs(args.outdir)
-
+def addMetrics(results, sig_accept_rate=0.7, plot=False, plot_dir="./"):
     '''
-    Training KamNet
+    Add a few metrics to the results
+        - Overall loss, ROC curve, AUC
+        - Rejection efficiency (keeping <sig_accept_rate> of signal)
+    '''
+    # Get overall loss
+    results['loss'] = np.mean(results['loss_per_batch'])
+    print(f"Loss | {results['loss']:.4f}")
+
+    # Get ROC curve
+    fpr, tpr, thresholds = metrics.roc_curve(results['label'], results['score'])
+    results['roc_fpr'] = fpr
+    results['roc_tpr'] = tpr
+    results['roc_thresholds'] = thresholds
+
+    # Get AUC
+    results['auc'] = metrics.auc(fpr, tpr)
+    print(f"AUC  | {results['auc']:.4f}")
+
+    # Get Rejection Efficiency
+    rej_eff = 1 - np.interp(sig_accept_rate, tpr, fpr)
+    print(f"BG Rejection Efficiency (keep {round(sig_accept_rate*100)}% signal) | {rej_eff*100:5.2f}%")
+
+    if plot:
+        # FIXME : plot stuff (roc curve, ...)
+        print("")
+
+    return results
+
+def trainKamNet(data_loader, kamnet_params, DEVICE,
+        learning_rate    = 0.000018675460538381732,
+        num_epochs       = 30,
+        validation_split = 0.3,
+        output_vars      = [],
+        result_dir_path  = "./training_results",
+        result_file_name = "test"):
+    '''
+    Train KamNet
     '''
 
-    train_loader, val_loader, time_channel = load_data(BATCH_SIZE, args.sig, args.bkg, args.elow, args.ehi, args.filemax)
+    # set up result file paths
+    t_result_path = os.path.join(result_dir_path, f"{result_file_name}_training_result.pickle")
+    v_result_path = os.path.join(result_dir_path, f"{result_file_name}_validation_result.pickle")
+    # FIXME : delete if already exists; will be appending to file!
 
-    classifier = KamNet(time_channel, param_dict)
+    # FIXME : split into training and validation dataset
+    train_loader = ""
+    val_loader = ""
 
-    #=====================================================================================
-    '''
-    This part allows the loading of previously trained of KamNet using '.pt' model
-    '''
-    # pretrained_dict = torch.load('pretrain_data.pt')
-    # model_dict = classifier.state_dict()
-    # model_dict.update(pretrained_dict) 
-    # classifier.load_state_dict(pretrained_dict)
-    #=====================================================================================
-
+    # ================== KAMNET INITIATION =====================
+    classifier = KamNet(data_loader.dataset.getInputDimension(), kamnet_params)
     classifier.to(DEVICE)
 
-    print("#params", sum(x.numel() for x in classifier.parameters()))
+    print(f"# of Parameters : {sum(x.numel() for x in classifier.parameters())}")
 
-    '''
-    Define the loss function
-    '''
+    # Define the loss function
     criterion = nn.BCEWithLogitsLoss()
     criterion = criterion.to(DEVICE)
 
-    #=====================================================================================
+    # Set up optimizer with varying learning rate
     '''
-    Set up optimizer with varying learning rate:
-      Ramp Up   : Gradually ramp up learning rate in the first 5 epochs, this allows the attention mechanism to learn proper attention score
-      Flat    : Fix the learning rate at the nominal value
-      Ramp Down : Ramp down the learning rate to 10% of nominal value in the last 10th - 5th epochs
-      Flat    : Fix the learning rate at 10% of the nominal value for the last 5 epochs
+    # Ramp Up   : Gradually ramp up learning rate in the first 5 epochs, this allows the attention mechanism to learn proper attention score
+    # Flat      : Fix the learning rate at the nominal value
+    # Ramp Down : Ramp down the learning rate to 10% of nominal value in the last 10th - 5th epochs
+    # Flat      : Fix the learning rate at 10% of the nominal value for the last 5 epochs
     '''
-    step_length = len(train_loader)
-    total_step = int(NUM_EPOCHS * step_length)
-    ramp_up = np.linspace(1e-4, 1.0, 5*step_length)
-    ramp_down = list(np.linspace(1.0, 0.1, 5*step_length).flatten()) + [0.1]* 5*step_length
-    ramp_down_start = total_step - len(ramp_down)
-    lmbda = lambda epoch: ramp_up[epoch] if epoch<len(ramp_up) else ramp_down[epoch-ramp_down_start-1] if epoch > ramp_down_start else 1.0
-    optimizer = torch.optim.RMSprop(classifier.parameters(),lr=param_dict["lr"], momentum=param_dict["momentum"])
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lmbda)
-    #=====================================================================================
+    step_size  = len(train_loader)
+    step_total = int(num_epochs * step_size)
+    len_up, len_down, len_end = 5 * step_size, 5 * step_size, 5 * step_size
+    len_mid    = step_total - sum(len_up, len_down, len_end)
 
-    # dictionary for saving to pickle
-    datadict = {}
-    for key in ['tsigmoid_s', 'tsigmoid_b', 'sigmoid_s', 'sigmoid_b',
-                't_rej_eff', 'rej_eff', 'auc', 't_loss', 'v_loss']:
-        datadict[key] = []
-        
-    for epoch in tqdm(range(NUM_EPOCHS)):
-        loss_i = 0
-        tsigmoid_s = []
-        tsigmoid_b = []
-        print(scheduler.get_lr())
+    ramp_up    = list(np.linspace(1e-4, 1.0, len_up))
+    flat_mid   = [1.0] * len_mid
+    ramp_down  = list(np.linspace(1.0, 0.1, len_down))
+    flat_end   = [0.1] * len_end
+    lr_list    = ramp_up + flat_mid + ramp_down + flat_end
+    
+    optimizer = torch.optim.RMSprop(classifier.parameters(), lr=kamnet_params["lr"], momentum=kamnet_params["momentum"])
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: lr_list[epoch])
 
-        # =========== TRAIN =============
-        for i, (images, labels) in tqdm(enumerate(train_loader)):
+    # ================== RUN TRAINING ==================
+    print("\n>>> Running KamNet...")
+    result_params = np.unique(['score','label','loss_per_batch'] + output_vars)
+
+    for epoch in range(num_epochs):
+        print(f"\n[ EPOCH {epoch + 1}/{num_epochs} ]   Learning Rate : {scheduler.get_lr()}")
+
+        # ================== TRAINING ==================
+        print("\nTraining...")
+        training_results = {el:[] for el in result_params}
+
+        for i, (images, labels, other_vars) in enumerate(train_loader):
             classifier.train()
-            images = images.to(DEVICE)
-            labels = labels.view(-1,1)
-            labels = labels.to(DEVICE).float()
 
-            outputs  = classifier(images)
-            loss = criterion(outputs,labels)
-            
-            lb_data = labels.cpu().data.numpy().flatten()
-            outpt_data = outputs.cpu().data.numpy().flatten()
-            signal = np.argwhere(lb_data == 1.0)
-            bkg = np.argwhere(lb_data == 0.0)
-            tsigmoid_s += list(outpt_data[signal].flatten())
-            tsigmoid_b += list(outpt_data[bkg].flatten())
+            outputs = classifier(images.to(DEVICE)).view(-1,1)
+            labels_float = labels.to(DEVICE).view(-1,1).float()
 
-            loss.backward()   # optimizer the net
+            loss = criterion(outputs, labels_float)
+            print(f"   - Iter {i}/{len(train_loader)} | Loss : {loss.item()}")
+
+            loss.backward()         # optimize the net
             optimizer.step()        # update parameters of net
             optimizer.zero_grad()   # reset gradient
             scheduler.step()
-            loss_i += loss.item()
-            # print('\rEpoch [{0}/{1}], Iter [{2}/{3}] Loss: {4:.4f}'.format(
-            #     epoch+1, NUM_EPOCHS, i+1, len(train_loader),
-            #     loss.item(), end=""))
-        datadict['t_loss'].append(loss_i/len(train_loader))
-        print(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {datadict['t_loss'][-1]:.4f}")
 
-        # =========== VALIDATE =============
-        sigmoid_s = []
-        sigmoid_b = []
-        loss_i = 0
-        for (images, labels) in val_loader:
+            # save results
+            label_array = labels_float.cpu().numpy().flatten()
+            score_array = outputs.cpu().data.numpy().flatten()
+
+            training_results['loss_per_batch'].append(loss.item())
+            training_results['score'] += list(score_array)
+            training_results['label'] += list(label_array)
+
+            for key, item in other_vars.items():
+                training_results[key] += list(item)
+        
+        # save training results
+        training_results = addMetrics(training_results, plot=True, plot_dir=result_dir_path)
+
+        with open(t_result_path, 'ab') as pfile:
+            pickle.dump(training_results, pfile)
+
+        # Save KamNet parameters to .pt file
+        torch.save(classifier.state_dict(), f'KamNet_{ev_suffix}.pt')
+
+        # ================== VALIDATION ==================
+        print("\nValidating...")
+        validation_results = {el:[] for el in result_params}
+
+        for (images, labels, other_vars) in val_loader:
             classifier.eval()
 
             with torch.no_grad():
-                images = images.to(DEVICE)
-                labels = labels.view(-1,1)
-                labels = labels.to(DEVICE).float()
+                outputs = classifier(images.to(DEVICE)).view(-1,1)
+                labels_float = labels.to(DEVICE).view(-1,1).float()
 
-                outputs  = classifier(images).view(-1,1)
+                loss = criterion(outputs, labels_float)
 
-                loss = criterion(outputs, labels)
-                loss_i += loss.item()
+                # save results
+                label_array = labels_float.cpu().numpy().flatten()
+                score_array = outputs.cpu().data.numpy().flatten()
 
-                image_data = images.cpu().data.numpy().reshape(BATCH_SIZE,-1)
-                lb_data = labels.cpu().data.numpy().flatten()
-                outpt_data = outputs.cpu().data.numpy().flatten()
+                validation_results['loss_per_batch'].append(loss.item())
+                validation_results['score'] += list(score_array)
+                validation_results['label'] += list(label_array)
 
-                signal = np.argwhere(lb_data == 1)
-                bkg = np.argwhere(lb_data == 0)
-                sigmoid_s += list(outpt_data[signal].flatten())
-                sigmoid_b += list(outpt_data[bkg].flatten())
-        datadict['v_loss'].append(loss_i/len(val_loader))
+                for key, item in other_vars.items():
+                    validation_results[key] += list(item)
 
-        # Rejection Efficiency calculation Training
-        cut = np.percentile(tsigmoid_s, 10)
-        reject = 0
-        for i in tsigmoid_b:
-            if i<cut:
-                reject += 1
-        rej_eff = 100*reject/len(tsigmoid_b)
-        datadict['t_rej_eff'].append(rej_eff)
-        print(f"training rejection efficiency: {rej_eff}")
+        validation_results = addMetrics(validation_results, plot=True, plot_dir=result_dir_path)
 
-        # Validation rejection
-        cut = np.percentile(sigmoid_s, 10)
-        reject = 0
-        for i in sigmoid_b:
-            if i<cut:
-                reject += 1
-        rej_eff = 100*reject/len(sigmoid_b)
-        datadict['rej_eff'].append(rej_eff)
-        print(f"validation rejection efficiency: {rej_eff}")
-
-        # Area Under ROC Curve
-        auc_labels = np.concatenate((np.ones(len(sigmoid_s)), np.zeros(len(sigmoid_b))))
-        auc_scores = np.concatenate((sigmoid_s, sigmoid_b))
-        auc_i = roc_auc_score(auc_labels, auc_scores)
-        datadict['auc'].append(auc_i)
-        print('AUC:', auc_i)
-
-        datadict['tsigmoid_s'].append(tsigmoid_s)
-        datadict['tsigmoid_b'].append(tsigmoid_b)
-        datadict['sigmoid_s'].append(sigmoid_s)
-        datadict['sigmoid_b'].append(sigmoid_b)
+        # save validation results to pickle file
+        with open(v_result_path, 'ab') as pfile:
+            pickle.dump(validation_results, pfile)
         
+        # clean up
         del images
         torch.cuda.empty_cache()
-        torch.save(classifier.state_dict(), f'{args.outdir}/KamNet_epoch{epoch}.pt')    # Save KamNet parameters in KamNet.pt file
-    torch.save(classifier.state_dict(), f'{args.outdir}/KamNet_final.pt')
+    # END of EPOCH loop
 
-    # save results
-    with open(f'{args.outdir}/results.p', 'wb') as pfile:
-        pickle.dump(datadict, pfile)
+    return 0
+
+def testKamNet(test_loader, kamnet_params, trained_model, DEVICE,
+        output_vars      = [],
+        result_dir_path  = "./test_results",
+        result_file_name = "test"):
+    '''
+    Test KamNet on a dataset with a previously trained KamNet model
+    '''
+    result_file_path = os.path.join(result_dir_path, f'{result_file_name}_test_result.pickle')
+
+    # ================== KAMNET INITIATION =====================
+    classifier = KamNet(test_loader.dataset.getInputDimension(), kamnet_params)
+
+    # Load previously trained model of KamNet using '.pt' model
+    print(f"\n>>> Loading previously trained model at {trained_model}")
+    pretrained_dict = torch.load(trained_model)
+    model_dict = classifier.state_dict()
+    model_dict.update(pretrained_dict)
+    classifier.load_state_dict(pretrained_dict)
+    classifier.to(DEVICE)
+
+    print(f"# of Parameters : {sum(x.numel() for x in classifier.parameters())}")
+
+    # Define the loss function
+    criterion = nn.BCEWithLogitsLoss()
+    criterion = criterion.to(DEVICE)
+
+    # ================== RUN VALIDATION ==================
+    print("\n>>> Running KamNet...")
+
+    default_results = ['score','label','loss_per_batch']
+    results = {el:[] for el in np.unique(default_results + output_vars)}
+    for (images, labels, other_vars) in tqdm(test_loader):
+        classifier.eval()
+
+        with torch.no_grad():
+            outputs = classifier(images.to(DEVICE)).view(-1,1)
+            labels_float = labels.to(DEVICE).view(-1,1).float()
+
+            loss = criterion(outputs, labels_float)
+
+            # save results
+            label_array = labels_float.cpu().numpy().flatten()
+            score_array = outputs.cpu().data.numpy().flatten()
+            
+            results['loss_per_batch'].append(loss.item())
+            results['score'] += list(score_array)
+            results['label'] += list(label_array)
+
+            for key, item in other_vars.items():
+                results[key] += list(item)
+
+    del images
+    torch.cuda.empty_cache()
+
+    results = addMetrics(results, plot=True, plot_dir=result_dir_path)
+
+    # save to pickle file
+    with open(result_file_path, 'wb') as pfile:
+        pickle.dump(results, pfile)
+        print(f"Results saved to {result_file_path}")
+
+    return 0
+
+def main(CONFIG, DEVICE):
+    '''
+    main function
+    '''
+    # set up output directory
+    if not os.path.exists(CONFIG['output_dir']):
+        os.makedirs(CONFIG['output_dir'])
+
+    # copy settings.toml over to result directory
+    shutil.copy(args.configfile, os.path.join(CONFIG['output_dir'], f"settings_{CONFIG['output_file_name']}.toml"))
+
+    # seed?
+    if CONFIG['use_seed']:
+        useSeed(seed=CONFIG['seed_value'])
+
+    # get list of input files
+    files_dict = {}
+    for isotope, folder in CONFIG['input'].items():
+        files_dict[isotope] = getFilesUnderFolder(folder, filetype="pickle")[:CONFIG['max_num_files']]
+
+    # ============= TRAIN ==============
+    if CONFIG['run_mode'] == "train":
+        data_loader = load_data(
+            files_dict,
+            CONFIG['signal_isotope'],
+            vars_to_output = CONFIG['output_vars'],
+            batch_size     = CONFIG['batch_size'],
+            elow           = CONFIG['elow'],
+            ehigh          = CONFIG['ehigh'],
+            dsize          = CONFIG['max_dataset_size'],
+            match_nhit     = "sig-bkg",
+            )
+
+        trainKamNet(
+            data_loader,
+            CONFIG['kamnet_params'],
+            CONFIG['trained_model'],
+            DEVICE,
+            learning_rate    = CONFIG['learning_rate'],
+            num_epochs       = CONFIG['num_epochs'],
+            validation_split = CONFIG['validation_split'],
+            output_vars      = CONFIG['output_vars'],
+            result_dir_path  = CONFIG['output_dir'],
+            result_file_name = CONFIG['output_file_name'],
+            )
+
+    # ============ TEST =============
+    elif CONFIG['run_mode'] == "test":
+
+        test_loader = load_data(
+            files_dict,
+            CONFIG['signal_isotope'],
+            vars_to_output = CONFIG['output_vars'],
+            batch_size     = CONFIG['batch_size'],
+            elow           = CONFIG['elow'],
+            ehigh          = CONFIG['ehigh'],
+            dsize          = CONFIG['max_dataset_size'],
+            match_nhit     = False,
+            )
+
+        testKamNet(
+            test_loader,
+            CONFIG['kamnet_params'],
+            CONFIG['trained_model'],
+            DEVICE,
+            output_vars      = CONFIG['output_vars'],
+            result_dir_path  = CONFIG['output_dir'],
+            result_file_name = CONFIG['output_file_name'],
+            )
+
+    return 0
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('configfile', type=str, action="store", help="Pass in .TOML file that contains KamNet settings to use.")
+    args = parser.parse_args()
+
+    # read config from TOML file
+    with open(args.configfile, "rb") as f:
+        CONFIG = tomllib.load(f)
+    
+    # initiate GPU device
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    try:
+        assert DEVICE.type == "cuda"
+        torch.zeros(1).cuda()
+    except RuntimeError as e:
+        print("************************************************")
+        print("* GPU is not available.                        *")
+        print("* Make sure you have access to a GPU.          *")
+        print("* Try running `nvidia-smi` and `kill -9 <PID>` *")
+        print("* to kill unwanted processes on GPU.           *")
+        print("************************************************")
+        sys.exit(e)
+
+    
+    main(CONFIG, DEVICE)
