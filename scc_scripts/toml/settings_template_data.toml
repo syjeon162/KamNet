@@ -1,0 +1,25 @@
+# ============================================
+# >>> >>> Settings for data processing <<< <<<
+# ============================================
+input  = "${INPUT}"
+output = "${OUTPUT}"
+
+pmt_file_index = "/project/snoplus/SoYoung/klz/pmt_xyz.dat"
+
+# Size of each hit map
+cols = ${COLS}
+rows = ${ROWS}
+
+# Fiducial volume cut for event selection
+fv_cut_low  = 0.0
+fv_cut_high = 167.0
+
+# Energy range for event selection
+elow  = ${ELOW}
+ehigh = ${EHIGH}
+
+# Other run settings
+good_pmthit = ${GOODPMT} # If true, use only good PMT hits, otherwise use all PMT hits
+only_17inch = false    # If true, use only 17-inch PMTs, otherwise use both 17 and 20 inch pmts
+use_charge  = false    # If true, register the corresponding charge of each PMT to hit map for each hit, otherwise register 1.0 for each hit
+plot_hitmap = false    # Plot flag. If true, plot hit maps of a input event. Note that if this flag is set to True, then the processing script won't process any file.
