@@ -1,0 +1,70 @@
+# ======================================
+# >>> >>> >>> Run Parameters <<< <<< <<<
+# ======================================
+use_seed = false
+seed_value = 7
+
+batch_size = 32
+max_dataset_size = 2000 # None or int
+learning_rate = 0.000018675460538381732
+
+# Name of isotope to designate as signal
+signal_isotope = "2nu_1st0p"
+
+elow = 1.5
+ehigh = 2.5
+max_num_files = 5
+
+# ***** FOR TRAINING *****
+run_mode = "train"
+num_epochs = 30
+validation_split = 0.25
+
+# ***** FOR TESTING *****
+# run_mode = "test"
+# trained_model = "/projectnb/snoplus/SoYoung/klz/kamnet-training/training_2nu1st0p-vs-2nu/KamNet_epoch18.pt"
+
+# =======================================
+# >>> >>> >>> Output Settings <<< <<< <<<
+# =======================================
+# Directory to save results to
+output_dir = "/projectnb/snoplus/SoYoung/klz/kamnet-testing/training_2nu1st0p-vs-2nu"
+
+# Variables to save along with KamNet score
+# By default, will only save score and label(1 for sig, 0 for bkg)
+# options: id, run, Nhit, energy, vertex, zpos, isotope
+output_vars = ["isotope", "energy", "Nhit"]
+
+make_plots = true
+save_attention_score = false
+
+# ===================================
+# >>> >>> >>> Input Files <<< <<< <<<
+# ===================================
+[input] # Path to directory containing pickle files for each isotope
+2nu_1st0p = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_1st0p_Xe136"
+Xe136     = "/projectnb/snoplus/SoYoung/klz/processed-for-kamnet/XeLS_2nu_Xe136"
+
+# ==============================================
+# >>> >>> >>> KamNet Hyperparameters <<< <<< <<<
+# ==============================================
+[kamnet_params]
+momentum = 0.7806697572271865
+lr = 7.729560386535045e-5
+first_filter = 5
+second_filter = 3
+do = 0.08623589261579744
+s2_1 = 36 
+so3_2 = 63
+so3_3 = 74 
+so3_4 = 124
+fc_max = 1080
+s1 = 12
+s2 = 22
+sdo = 0.406085565931351
+optimizer = "RMSprop"
+s2gridtype = "s2_ni"
+so3gridtype = "so3_eq"
+ftype = "SO3I"
+last_bw = 2
+do2 = 0.0

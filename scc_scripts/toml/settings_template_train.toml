@@ -1,0 +1,64 @@
+# ======================================
+# >>> >>> >>> Run Parameters <<< <<< <<<
+# ======================================
+use_seed = false
+seed_value = 7
+
+batch_size = 32
+max_dataset_size = ${DSIZE} # None or int
+learning_rate = 0.000018675460538381732
+
+# Name of isotope to designate as signal
+signal_isotope = "${SIGNAL}"
+
+elow = ${ELOW}
+ehigh = ${EHIGH}
+max_num_files = ${MAXNFILES}
+
+# ***** FOR TRAINING *****
+run_mode = "train"
+num_epochs = ${NUM_EPOCHS}
+validation_split = 0.25
+
+# =======================================
+# >>> >>> >>> Output Settings <<< <<< <<<
+# =======================================
+# Directory to save results to
+output_dir = "${OUTDIR}"
+
+# Variables to save along with KamNet score
+# By default, will only save score and label(1 for sig, 0 for bkg)
+# options: id, run, Nhit, energy, vertex, zpos, event, isotope
+output_vars = ["isotope", "energy"]
+
+make_plots = true
+save_attention_score = false
+
+# ==============================================
+# >>> >>> >>> KamNet Hyperparameters <<< <<< <<<
+# ==============================================
+[kamnet_params]
+momentum = 0.7806697572271865
+lr = 7.729560386535045e-5
+first_filter = 5
+second_filter = 3
+do = 0.08623589261579744
+s2_1 = 36 
+so3_2 = 63
+so3_3 = 74 
+so3_4 = 124
+fc_max = 1080
+s1 = 12
+s2 = 22
+sdo = 0.406085565931351
+optimizer = "RMSprop"
+s2gridtype = "s2_ni"
+so3gridtype = "so3_eq"
+ftype = "SO3I"
+last_bw = 2
+do2 = 0.0
+
+# ===================================
+# >>> >>> >>> Input Files <<< <<< <<<
+# ===================================
+[input] # Path to directory containing pickle files for each isotope
